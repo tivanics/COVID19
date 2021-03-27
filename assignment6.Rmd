@@ -1,0 +1,293 @@
+---
+title: "COVID-19 Application"
+runtime: shiny
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+    social: menu
+    source_code: 
+    theme: simplex
+
+---
+
+```{r setup, include=FALSE}
+library(shiny)
+library(leaflet) 
+library(tidyverse)
+library(plotly) 
+library(ggplot2) 
+library(sp)
+library(dplyr)
+library(flexdashboard) 
+library(maptools)
+library(readr)
+library(viridis)
+library(mapview)
+library(leafsync)
+library(geojsonio)
+options(scipen = 999)
+
+# Define the list of available metros
+lookupcountry <- structure(c("Sweden", "Afghanistan","Germany", "France", "United Kingdom"))
+lookupcountry2 <- structure(c("Sweden", "Afghanistan", "Germany", "France", "United Kingdom"))
+lookupinterest <- structure(c("Confirmed cases", "Deaths", "Recovered"))
+lookupscale <- structure(c("Natural log", "Raw scale"))
+lookupsmoother <- structure(c("No", "Yes"))
+lookupstart <- structure(c("Calendar date", "Time since first case"))
+
+# Read in data, and subset for the selected metro
+confirmed <- read_csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv")
+deaths <- read_csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv") 
+recovered <- read_csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_recovered_global.csv") 
+
+#Worldcountry
+WorldCountry <-geojsonio::geojson_read("https://raw.githubusercontent.com/johan/world.geo.json/master/countries.geo.json", what = "sp")
+
+WorldCountry$id[which(WorldCountry$id == "SWE")] <- "Sweden"
+WorldCountry$id[which(WorldCountry$id == "AFG")] <- "Afghanistan"
+WorldCountry$id[which(WorldCountry$id == "DEU")] <- "Germany"
+WorldCountry$id[which(WorldCountry$id == "FRA")] <- "France"
+WorldCountry$id[which(WorldCountry$id == "GBR")] <- "United Kingdom"
+WorldCountry$id[which(WorldCountry$id == "BRA")] <- "Brazil"
+WorldCountry$id[which(WorldCountry$id == "USA")] <- "US"
+
+#Write a function for taking the dateframe
+#Deaths
+deaths <- deaths %>% 
+  gather(Date, Outcome, 5:length(deaths)) %>%
+  rename(Country = `Country/Region`) %>%
+  rename(Province = `Province/State`)
+
+deaths <- deaths %>%
+  mutate(Date = lubridate::mdy(Date))
+
+#Confirmed
+confirmed <- confirmed %>% 
+  gather(Date, Outcome, 5:length(confirmed)) %>%
+  rename(Country = `Country/Region`) %>%
+  rename(Province = `Province/State`)
+
+confirmed <- confirmed %>%
+  mutate(Date = lubridate::mdy(Date))
+
+#Recovered
+recovered <- recovered %>% 
+  gather(Date, Outcome, 5:length(recovered)) %>%
+  rename(Country = `Country/Region`) %>%
+  rename(Province = `Province/State`)
+
+recovered <- recovered %>%
+  mutate(Date = lubridate::mdy(Date))
+
+x <- list(confirmed, deaths, recovered)
+
+m <- reactive({
+  if(input$outcome == "Confirmed cases"){
+    m <- as.data.frame(x[1])
+    m <- m %>% filter((m$Country %in% input$country3 & is.na(m$Province)))
+    if(input$start == "Time since first case"){
+    m <- m %>% filter(m$Outcome > 0)  
+    }
+    return(m)
+  }
+  else if(input$outcome == "Deaths"){
+    m <- as.data.frame(x[2])
+    m <- m %>% filter((m$Country %in% input$country3 & is.na(m$Province))) 
+    if(input$start == "Time since first case"){
+    m <- m %>% filter(m$Outcome > 0)  
+    }
+    return(m)
+  }
+  else {
+    m <- as.data.frame(x[3])
+    m <- m %>% filter((m$Country %in% input$country3 & is.na(m$Province)))
+    if(input$start == "Time since first case"){
+    m <- m %>% filter(m$Outcome > 0)  
+    }
+    return(m)
+  }
+  
+})
+```
+
+Sidebar {.sidebar}
+======================================================================
+
+```{r}
+checkboxGroupInput("country3", "Countries to show:",
+                           c("Sweden" = "Sweden",
+                             "Afghanistan" = "Afghanistan",
+                             "Germany" = "Germany",
+                             "France" = "France",
+                             "United Kingdom" = "United Kingdom",
+                             "Brazil" = "Brazil",
+                             "USA" = "US"))
+
+output$txt <- renderText({
+    country3 <- paste(input$country3, collapse = ", ")
+    paste("You chose", country3)
+  })
+
+#Define country
+#selectInput('country', label = 'Select a Country', choices = lookupcountry, selected = "Sweden")
+
+#Define country
+#selectInput('country2', label = 'Select a Country for comparison', choices = lookupcountry, selected = "Afghanistan")
+
+#Define natural log or raw scale 
+selectInput('scale', label = 'Select a scale', choices = lookupscale, selected = "Raw scale")
+#Define Smoothed
+#selectInput('smoother', label = 'Smoother', choices = lookupsmoother, selected = "No")
+checkboxInput("smoother", "Add smoother", FALSE)
+#Define outcome
+selectInput('outcome', label = 'Select your outcomes of interest', choices = lookupinterest, selected = "Confirmed cases")
+#Define start
+selectInput('start', label = 'Start by calendar date or time since first case', choices = lookupstart, selected = "Calendar date")
+
+```
+
+Use the __Explore country trends__ tab to explore time series trends for your chosen country. 
+
+Click the __Compare countries__ tab to perform a comparative evaluation between countries for the selected variables of interest. To learn more about the project, click the __About__ tab.  
+
+Application author: [Tommy Ivanics](https://github.com/tivanics), [Johns Hopkins Bloomberg School of Public Health](https://www.jhsph.edu)
+
+Explore country trends
+======================================================================
+
+Row
+-----------------------------------------------------------------------
+
+### Time series trends in selected country
+
+```{r}
+output$scatter <- renderPlotly({
+  if(input$scale == "Raw scale"){
+  p1a <- ggplot(m()) + 
+    geom_point(alpha = 0.4, aes(Date, Outcome, fill=Country)) + 
+    theme_minimal(base_size = 14) + 
+    labs(x="Date", y=input$outcome)
+  if(input$smoother == 1){
+    for(i in seq_along(input$country3)){
+    p1a <- p1a + stat_smooth(data=subset(m(), Country %in% input$country3[i]), 
+                aes(Date, Outcome), 
+                color = '#FFD700', 
+                method = 'loess',
+                se = FALSE,
+                alpha = 1)
+    i+1
+    }
+    p1a
+  }
+  else{
+    p1a
+  }
+  }
+  else if(input$scale == "Natural log"){
+  p1a <- ggplot(m()) + 
+    geom_point(alpha = 0.4, aes(Date, log(Outcome), fill=Country)) + 
+    theme_minimal(base_size = 14) + 
+    labs(x="Date", y=paste("Natural log of", input$outcome))
+  if(input$smoother == 1){
+    for(i in seq_along(input$country3)){
+        p1a <- p1a + stat_smooth(data=subset(m(), Country %in% input$country3[i]), 
+                aes(Date, log(Outcome)), 
+                color = '#FFD700', 
+                method = 'loess',
+                se = FALSE,
+                alpha = 1)
+        i+1
+    }
+    p1a
+  }
+  else{
+    p1a
+  }
+  }
+})  
+
+plotlyOutput('scatter', width = "80%")
+```
+
+Row 
+-----------------------------------------------------------------------
+### Map of selected country
+
+```{r}
+output$maps <- renderLeaflet({
+    data_Map <- WorldCountry[WorldCountry$id %in% m()$Country, ]
+map <- leaflet(data_Map) %>% addTiles() %>% addPolygons()
+    
+})  
+leafletOutput('maps', width = "80%")
+```
+
+About
+============================================================================
+
+This application is for the course **Data Science for Public Health**, ["Data Science in Biomedical Engineering and Data Science for Public Health."](https://github.com/bcaffo/ds4ph-bme).
+
+The COVID-19 application analyzes international temporal trends in case number, deaths, and recovered cases.
+
+There are three key metric in this article: **Case numbers** **Deaths** **Recoveries** 
+
+This application allows users to explore these outcomes interactively.  The user can select a scale **Natural log or raw scale**, choose to add a **loess smoother**, and select a start time by **calendar date** or **date of first case**. 
+
+Temporal (time-series) data for the application come from [COVID-19 Data Repository by the Center for Systems Science and Engineering (CSSE) at Johns Hopkins University](https://github.com/CSSEGISandData/COVID-19), and individual data for outcomes can be found here: [Cases](https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv) [Deaths](https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv) and [Recoveries](https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_recovered_global.csv).
+
+The application is built with the [Shiny](http://shiny.rstudio.com) framework for the [R programming language](https://www.r-project.org/). The application layout is produced with the [flexdashboard](http://rstudio.github.io/flexdashboard/index.html) package, and the charts and maps use [Plotly](http://plot.ly), [Leaflet.js](http://leafletjs.com/), and [ggplot2](http://ggplot2.org/), all accessed through their corresponding R packages.  
+
+I welcome feedback and suggestions!  [Please visit my GitHub](https://github.com/tivanics/) for contact information or [connect with me on Twitter](https://twitter.com/ivanics_t).  
+
+
+<style>
+
+.section.sidebar {
+
+  background-color: white; 
+  font-family: "Open-Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+
+}
+
+.js-irs-0 .irs-bar {
+border-top-color: #443A83;
+border-bottom-color: #443A83;
+} 
+
+.js-irs-0 .irs-bar-edge {
+border-color: #443A83;
+}
+
+.js-irs-0 .irs-single, .js-irs-0 .irs-bar-edge, .js-irs-0 .irs-bar {
+background: #443A83;
+}
+
+.navbar-inverse {
+background-color: #443A83;
+border-color: #440154;
+}
+
+.navbar-inverse .navbar-brand {
+color: #a3a9ac;
+}
+
+a:hover, a:focus {
+color: #440154;
+text-decoration: underline;
+}
+
+a {
+color: #443A83;
+text-decoration: none;
+}
+
+.navbar-inverse .navbar-nav>li>a {
+color: #a3a9ac;
+}
+
+</style>
+
+
+
+
